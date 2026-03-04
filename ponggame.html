@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pong</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0b0f14;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    .wrap {
+      display: grid;
+      gap: 10px;
+      justify-items: center;
+      padding: 16px;
+    }
+    canvas {
+      background: #05070a;
+      border: 2px solid #1e2a36;
+      border-radius: 12px;
+      box-shadow: 0 14px 40px rgba(0,0,0,0.45);
+      image-rendering: pixelated;
+      touch-action: none;
+    }
+    .hud {
+      width: min(860px, 92vw);
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 10px;
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+    .hud .center {
+      text-align: center;
+      opacity: 0.9;
+    }
+    .pill {
+      justify-self: start;
+      padding: 6px 10px;
+      border: 1px solid #223041;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.03);
+    }
+    .pill.right { justify-self: end; }
+    kbd {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud">
+      <div class="pill" id="scoreLeft">Links: 0</div>
+      <div class="center">
+        <span>Bewegen: <kbd>W</kbd>/<kbd>S</kbd> und <kbd>↑</kbd>/<kbd>↓</kbd> · Pause: <kbd>P</kbd> · Neustart: <kbd>R</kbd></span>
+      </div>
+      <div class="pill right" id="scoreRight">Rechts: 0</div>
+    </div>
+
+    <canvas id="game" width="860" height="480" aria-label="Pong Spiel"></canvas>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+
+      const scoreLeftEl = document.getElementById("scoreLeft");
+      const scoreRightEl = document.getElementById("scoreRight");
+
+      // Spielparameter
+      const W = canvas.width;
+      const H = canvas.height;
+
+      const paddle = {
+        w: 14,
+        h: 92,
+        speed: 520 // px/s
+      };
+
+      const ballCfg = {
+        r: 8,
+        speedStart: 420,
+        speedMax: 900,
+        speedIncOnHit: 28
+      };
+
+      const state = {
+        paused: false,
+        scoreL: 0,
+        scoreR: 0,
+        keys: new Set(),
+        lastTime: performance.now()
+      };
+
+      const left = {
+        x: 24,
+        y: (H - paddle.h) / 2,
+        vy: 0
+      };
+
+      const right = {
+        x: W - 24 - paddle.w,
+        y: (H - paddle.h) / 2,
+        vy: 0
+      };
+
+      const ball = {
+        x: W / 2,
+        y: H / 2,
+        vx: 0,
+        vy: 0,
+        speed: ballCfg.speedStart
+      };
+
+      function clamp(v, min, max) {
+        return Math.max(min, Math.min(max, v));
+      }
+
+      function resetBall(servingToRight) {
+        ball.x = W / 2;
+        ball.y = H / 2;
+
+        // leichter Zufallswinkel, nie komplett horizontal
+        const angle = (Math.random() * 0.9 - 0.45); // -0.45..0.45 rad
+        const dir = servingToRight ? 1 : -1;
+
+        ball.speed = ballCfg.speedStart;
+        ball.vx = Math.cos(angle) * ball.speed * dir;
+        ball.vy = Math.sin(angle) * ball.speed;
+      }
+
+      function resetAll() {
+        state.scoreL = 0;
+        state.scoreR = 0;
+        left.y = (H - paddle.h) / 2;
+        right.y = (H - paddle.h) / 2;
+        state.paused = false;
+        updateScore();
+        resetBall(true);
+      }
+
+      function updateScore() {
+        scoreLeftEl.textContent = `Links: ${state.scoreL}`;
+        scoreRightEl.textContent = `Rechts: ${state.scoreR}`;
+      }
+
+      function rectIntersect(ax, ay, aw, ah, bx, by, bw, bh) {
+        return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+      }
+
+      function drawNet() {
+        ctx.save();
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = "#94a3b8";
+        const dashH = 14;
+        const gap = 10;
+        const x = (W / 2) - 2;
+        for (let y = 14; y < H; y += dashH + gap) {
+          ctx.fillRect(x, y, 4, dashH);
+        }
+        ctx.restore();
+      }
+
+      function draw() {
+        // Hintergrund
+        ctx.clearRect(0, 0, W, H);
+
+        // Net
+        drawNet();
+
+        // Paddles
+        ctx.fillStyle = "#e2e8f0";
+        ctx.fillRect(left.x, left.y, paddle.w, paddle.h);
+        ctx.fillRect(right.x, right.y, paddle.w, paddle.h);
+
+        // Ball
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ballCfg.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pause Overlay
+        if (state.paused) {
+          ctx.save();
+          ctx.fillStyle = "rgba(0,0,0,0.45)";
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = "#e2e8f0";
+          ctx.font = "600 28px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.textAlign = "center";
+          ctx.fillText("PAUSE", W / 2, H / 2 - 8);
+          ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.fillText("Drücke P zum Fortsetzen", W / 2, H / 2 + 20);
+          ctx.restore();
+        }
+      }
+
+      function handleInput(dt) {
+        // Links: W/S
+        left.vy = 0;
+        if (state.keys.has("KeyW")) left.vy = -paddle.speed;
+        if (state.keys.has("KeyS")) left.vy = paddle.speed;
+
+        // Rechts: Pfeile
+        right.vy = 0;
+        if (state.keys.has("ArrowUp")) right.vy = -paddle.speed;
+        if (state.keys.has("ArrowDown")) right.vy = paddle.speed;
+
+        left.y = clamp(left.y + left.vy * dt, 0, H - paddle.h);
+        right.y = clamp(right.y + right.vy * dt, 0, H - paddle.h);
+      }
+
+      function bounceOffPaddle(p) {
+        // Trefferpunkt relativ zur Paddle-Mitte (-1..1)
+        const pMid = p.y + paddle.h / 2;
+        const rel = clamp((ball.y - pMid) / (paddle.h / 2), -1, 1);
+
+        // Winkelsteuerung: je weiter aussen, desto steiler
+        const maxAngle = 0.95; // rad
+        const angle = rel * maxAngle;
+
+        // Richtung: abhängig davon, welche Seite
+        const dir = (p === left) ? 1 : -1;
+
+        ball.speed = Math.min(ballCfg.speedMax, ball.speed + ballCfg.speedIncOnHit);
+        ball.vx = Math.cos(angle) * ball.speed * dir;
+        ball.vy = Math.sin(angle) * ball.speed;
+
+        // Ball leicht aus dem Paddle schieben, damit er nicht "klebt"
+        if (p === left) ball.x = left.x + paddle.w + ballCfg.r + 0.5;
+        else ball.x = right.x - ballCfg.r - 0.5;
+      }
+
+      function update(dt) {
+        handleInput(dt);
+
+        // Ball bewegen
+        ball.x += ball.vx * dt;
+        ball.y += ball.vy * dt;
+
+        // Oben/Unten abprallen
+        if (ball.y - ballCfg.r <= 0) {
+          ball.y = ballCfg.r;
+          ball.vy *= -1;
+        } else if (ball.y + ballCfg.r >= H) {
+          ball.y = H - ballCfg.r;
+          ball.vy *= -1;
+        }
+
+        // Paddle-Kollisionen (AABB mit Ball als Quadrat)
+        const ballBoxX = ball.x - ballCfg.r;
+        const ballBoxY = ball.y - ballCfg.r;
+        const ballBoxS = ballCfg.r * 2;
+
+        // Linkes Paddle
+        if (ball.vx < 0 && rectIntersect(ballBoxX, ballBoxY, ballBoxS, ballBoxS, left.x, left.y, paddle.w, paddle.h)) {
+          bounceOffPaddle(left);
+        }
+
+        // Rechtes Paddle
+        if (ball.vx > 0 && rectIntersect(ballBoxX, ballBoxY, ballBoxS, ballBoxS, right.x, right.y, paddle.w, paddle.h)) {
+          bounceOffPaddle(right);
+        }
+
+        // Scoring
+        if (ball.x + ballCfg.r < 0) {
+          state.scoreR += 1;
+          updateScore();
+          resetBall(false); // serve to left
+        } else if (ball.x - ballCfg.r > W) {
+          state.scoreL += 1;
+          updateScore();
+          resetBall(true); // serve to right
+        }
+      }
+
+      function loop(now) {
+        const dt = Math.min(0.033, (now - state.lastTime) / 1000); // clamp für Stabilität
+        state.lastTime = now;
+
+        if (!state.paused) update(dt);
+        draw();
+
+        requestAnimationFrame(loop);
+      }
+
+      // Events
+      window.addEventListener("keydown", (e) => {
+        if (e.code === "KeyP") {
+          state.paused = !state.paused;
+          return;
+        }
+        if (e.code === "KeyR") {
+          resetAll();
+          return;
+        }
+        state.keys.add(e.code);
+      });
+
+      window.addEventListener("keyup", (e) => {
+        state.keys.delete(e.code);
+      });
+
+      // Start
+      resetAll();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
